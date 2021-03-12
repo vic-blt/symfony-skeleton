@@ -1,0 +1,71 @@
+version: '3.4'
+
+services:
+    php:
+        container_name: symfony_php
+        build:
+            context: .
+            target: symfony_php
+        image: symfony_php:latest
+        environment:
+            - APP_ENV=${APP_ENV}
+            - APP_DEBUG=${APP_DEBUG}
+            - APP_SECRET=${APP_SECRET}
+            - DATABASE_URL=${DATABASE_URL}
+            - PHP_DATE_TIMEZONE=${PHP_DATE_TIMEZONE}
+        volumes:
+            - .:/var/www/html
+        networks:
+            - dev
+
+    mysql:
+        container_name: symfony_mysql
+        image: percona:5.7
+        environment:
+            - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
+            - MYSQL_DATABASE=pm_dev
+        volumes:
+            - mysql-data:/var/lib/mysql
+        ports:
+            - 3306:3306
+        networks:
+            - dev
+
+    nginx:
+        container_name: symfony_nginx
+        image: nginx:1.19-alpine
+        environment:
+            - HOST=localhost
+            - FASTCGI_PASS=php
+            - NGINX_ENVSUBST_OUTPUT_DIR=/etc/nginx
+            - ERROR_LOG=/dev/stdout
+            - ACCESS_LOG=/dev/stdout
+        depends_on:
+            - php
+        volumes:
+            - ./public:/var/www/html/public
+            - ./docker/nginx/ssl:/etc/nginx/ssl
+            - ./docker/nginx/conf.d:/etc/nginx/conf.d
+            - ./docker/nginx/templates:/etc/nginx/templates
+        ports:
+            - 80:80
+            - 443:443
+        networks:
+            - dev
+
+#    nodejs:
+#        container_name: symfony_nodejs
+#        image: node:10-alpine
+#        command: >
+#            sh -c "yarn install --quiet &&
+#                   yarn watch"
+#        volumes:
+#            - .:/var/www/html
+#        networks:
+#            - dev
+
+volumes:
+    mysql-data:
+
+networks:
+    dev:

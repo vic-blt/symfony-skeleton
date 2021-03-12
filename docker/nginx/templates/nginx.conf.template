@@ -1,0 +1,169 @@
+# The maximum number of connections for Nginx is calculated by:
+# max_clients = worker_processes * worker_connections
+worker_processes auto;
+
+# Defines a file that will store the process ID of the main process.
+pid /var/run/nginx.pid;
+
+events {
+    # Sets the maximum number of simultaneous connections that can be opened by a worker process.
+    # It should be kept in mind that this number includes all connections (e.g. connections with proxied servers,
+    # among others), not only connections with clients. Another consideration is that the actual number of
+    # simultaneous connections cannot exceed the current limit on the maximum number of open files,
+    # which can be changed by worker_rlimit_nofile.
+    worker_connections 5120;
+
+    # If multi_accept is disabled, a worker process will accept one new connection at a time.
+    # Otherwise, a worker process will accept all new connections at a time.
+    multi_accept on;
+}
+
+http {
+    log_format custom '$remote_addr - $remote_user [$time_local] '
+                      '"$request" $status $body_bytes_sent '
+                      '"$http_referer" "$http_user_agent" '
+                      '"$http_x_forwarded_for" $request_id ';
+    error_log ${ERROR_LOG};
+    access_log ${ACCESS_LOG};
+
+    # Speed up file transfers by using sendfile() to copy directly
+    # between descriptors rather than using read()/write().
+    sendfile on;
+    # When set to a non-zero value, limits the amount of data that
+    # can be transferred in a single sendfile() call.
+    # Without the limit, one fast connection may seize the worker process entirely.
+    sendfile_max_chunk 1M;
+
+    # Tell Nginx not to send out partial frames; this increases throughput
+    # since TCP frames are filled up before being sent out. (adds TCP_CORK)
+    #tcp_nopush on;
+
+    # How long to allow each connection to stay idle; longer values are better
+    # for each individual client, particularly for SSL, but means that worker
+    # connections are tied up longer. (Default: 65)
+    #keepalive_timeout 65;
+
+    # Sets the maximum size of the types hash tables.
+    #types_hash_max_size 2048;
+
+    # Hide nginx version information.
+    server_tokens off;
+
+    # Sets the maximum allowed size of the client request body, specified in
+    # the “Content-Length” request header field. If the size in a request exceeds
+    # the configured value, the 413 (Request Entity Too Large) error is returned to the client.
+    # Please be aware that browsers cannot correctly display this error.
+    #client_max_body_size 250m;
+
+    include mime.types;
+    default_type application/octet-stream;
+
+    # Enables the specified protocols.
+    ssl_protocols TLSv1 TLSv1.1 TLSv1.2 TLSv1.3;
+
+    # Specifies that server ciphers should be preferred over client ciphers when using the SSLv3 and TLS protocols.
+    ssl_prefer_server_ciphers on;
+
+    ssl_certificate /etc/nginx/ssl/certificate.pem;
+    ssl_certificate_key /etc/nginx/ssl/key.pem;
+
+    # Enables or disables stapling of OCSP responses by the server.
+    #ssl_stapling on;
+    #  Enables or disables verification of OCSP responses by the server.
+    #ssl_stapling_verify on;
+
+    resolver 1.1.1.1 1.0.0.1 [2606:4700:4700::1111] [2606:4700:4700::1001];
+
+    # enable session resumption to improve https performance
+    ssl_session_cache shared:SSL:50m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    # Diffie-Hellman parameter for DHE ciphersuites, recommended 2048 bits
+    ssl_dhparam /etc/nginx/ssl/dhparam.pem;
+
+    # Enables or disables gzipping of responses.
+    gzip on;
+
+    # Disables gzipping of responses for requests with “User-Agent” header fields matching any of the specified regular expressions.
+    # The special mask “msie6” (0.7.12) corresponds to the regular expression “MSIE [4-6]\.”, but works faster
+    gzip_disable "msie6";
+
+    # Compress all output labeled with one of the following MIME-types.
+    gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript image/svg+xml image/png image/jpeg;
+
+    # Sets the number and size of the buffers used for reading a response from the FastCGI server,
+    # for a single connection. By default, the buffer size is equal to one memory page.
+    # This is either 4K or 8K, depending on a platform.
+    fastcgi_buffers 8 128k;
+    # Sets the size of the buffer used for reading the first part of the response received
+    # from the FastCGI server. This part usually contains a small response header.
+    # By default, the buffer size is equal to one memory page.
+    # This is either 4K or 8K, depending on a platform. It can be made smaller, however.
+    fastcgi_buffer_size 256k;
+
+    # Enables automatic conversion of preload links specified in the “Link” response header fields into push requests.
+    #http2_push_preload on;
+    # Sets the bucket size for the server names hash tables.
+    # The default value depends on the size of the processor’s cache line.
+    #server_names_hash_bucket_size 128;
+
+    include /etc/nginx/conf.d/http_headers.conf;
+
+    server {
+        listen 80;
+        listen [::]:80;
+        server_name ${HOST};
+        return 301 https://$host$request_uri;
+    }
+
+    server {
+        listen 443 ssl http2;
+        listen [::]:443 ssl http2;
+        server_name ${HOST};
+
+        include /etc/nginx/conf.d/https_headers.conf;
+
+        root /var/www/html/public;
+
+        location / {
+            # try to serve file directly, fallback to index.php
+            try_files $uri /index.php$is_args$args;
+        }
+
+        location ~ ^/index\.php(/|$) {
+            fastcgi_hide_header X-Powered-By;
+            fastcgi_hide_header X-CF-Powered-By;
+
+            # Comment the next line and uncomment the next to enable dynamic resolution (incompatible with Kubernetes)
+            fastcgi_pass ${FASTCGI_PASS}:9000;
+            #resolver 127.0.0.11;
+            #set $upstream_host php;
+            #fastcgi_pass $upstream_host:9000;
+
+            fastcgi_split_path_info ^(.+\.php)(/.*)$;
+            include fastcgi_params;
+            # When you are using symlinks to link the document root to the
+            # current version of your application, you should pass the real
+            # application path instead of the path to the symlink to PHP
+            # FPM.
+            # Otherwise, PHP's OPcache may not properly detect changes to
+            # your PHP files (see https://github.com/zendtech/ZendOptimizerPlus/issues/126
+            # for more information).
+            fastcgi_param SCRIPT_FILENAME $realpath_root$fastcgi_script_name;
+            fastcgi_param DOCUMENT_ROOT $realpath_root;
+            # Prevents URIs that include the front controller. This will 404:
+            # http://domain.tld/index.php/some-path
+            # Remove the internal directive to allow URIs like this
+            internal;
+        }
+
+        # return 404 for all other php files not matching the front controller
+        # this prevents access to other php files you don't want to be accessible.
+        location ~ \.php$ {
+          return 404;
+        }
+
+        client_max_body_size 50m;
+    }
+}
